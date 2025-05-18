@@ -1,0 +1,45 @@
+version: "3.9"
+
+services:
+  backend:
+    depends_on:
+      - ai-engine
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/code
+    working_dir: /code
+    env_file:
+      - .env
+    environment:
+      - ENVIRONMENT=development
+
+  ai-engine:
+    build:
+      context: ./ai-engine
+      dockerfile: Dockerfile
+    command: uvicorn app:app --host 0.0.0.0 --port 8001 --reload
+    ports:
+      - "8001:8001"
+    environment:
+      - ENVIRONMENT=development
+    volumes:
+      - ./ai-engine:/code
+    working_dir: /code
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:5173"
+    working_dir: /app
+    environment:
+      - ENVIRONMENT=development
+

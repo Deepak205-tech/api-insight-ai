@@ -1,0 +1,5 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Remove all custom CSS. Use Tailwind classes directly in your JSX for a modern look. */

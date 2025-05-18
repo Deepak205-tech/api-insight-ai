@@ -1,0 +1,11 @@
+{
+  "model": "mistral",
+  "compute": {
+    "threads": 4,
+    "batch": 512
+  },
+  "memory": {
+    "gpu": true,
+    "max": "4GiB"
+  }
+}
