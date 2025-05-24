@@ -12,38 +12,54 @@ function App() {
   const [apiSpec, setApiSpec] = useState('');
   const [testCases, setTestCases] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [activeCategory, setActiveCategory] = useState(null);
 
-  const generateTests = async () => {
+  const categoryPrompts = {
+    positive: 'Generate only positive test cases for this API endpoint. Return ONLY a valid JSON array of positive test cases as described in the previous format. Do not include any other categories or explanations.',
+    negative: 'Generate only negative test cases for this API endpoint. Return ONLY a valid JSON array of negative test cases as described in the previous format. Do not include any other categories or explanations.',
+    edge: 'Generate only edge test cases for this API endpoint. Return ONLY a valid JSON array of edge test cases as described in the previous format. Do not include any other categories or explanations.',
+    security: 'Generate only security test cases for this API endpoint. Return ONLY a valid JSON array of security test cases as described in the previous format. Do not include any other categories or explanations.'
+  };
+
+  const generateCategoryTests = async (category) => {
     setLoading(true);
     setTestCases(null);
+    setActiveCategory(category);
     try {
       const endpoints = apiSpec.split('\n').map(e => e.trim()).filter(Boolean);
-      for (const endpoint of endpoints) {
-        const response = await axios.post('http://localhost:8000/analyze-api', {
-          endpoints: [endpoint]
-        });
-        if (response.data.error) {
-          console.error('Error:', response.data.error);
-          continue;
-        }
-        let parsedTestCases;
-        if (typeof response.data.testcases === 'string') {
-          try {
-            parsedTestCases = JSON.parse(response.data.testcases);
-          } catch (e) {
-            console.error('Failed to parse testcases string:', e);
-            parsedTestCases = {
-              positive_tests: [{ raw_response: response.data.testcases }],
-              negative_tests: [],
-              edge_tests: [],
-              security_tests: []
-            };
-          }
-        } else {
-          parsedTestCases = response.data.testcases;
-        }
-        setTestCases(parsedTestCases);
+      if (endpoints.length === 0) return;
+      const endpoint = endpoints[0];
+      const prompt = `${endpoint}\n${categoryPrompts[category]}`;
+      const response = await axios.post('http://localhost:8000/analyze-api', {
+        endpoints: [prompt]
+      });
+      if (response.data.error) {
+        console.error('Error:', response.data.error);
+        setTestCases(null);
+        return;
       }
+      let parsedTestCases;
+      // Always parse the string if needed
+      let tc = response.data.testcases;
+      if (typeof tc === 'string') {
+        try {
+          tc = JSON.parse(tc);
+        } catch (e) {
+          console.error('Failed to parse testcases string:', e);
+          setTestCases([{ raw_response: response.data.testcases }]);
+          setLoading(false);
+          return;
+        }
+      }
+      // If tc is an object with category arrays, extract the correct one
+      if (tc && typeof tc === 'object' && !Array.isArray(tc) && Array.isArray(tc[category + '_tests'])) {
+        parsedTestCases = tc[category + '_tests'];
+      } else if (Array.isArray(tc)) {
+        parsedTestCases = tc;
+      } else {
+        parsedTestCases = [];
+      }
+      setTestCases(parsedTestCases);
     } catch (error) {
       console.error('Error generating tests:', error);
       setTestCases(null);
@@ -69,7 +85,7 @@ function App() {
           <table className="min-w-full divide-y divide-gray-700">
             <thead className="bg-gray-800">
               <tr>
-                {["#", "URL", "Method", "Headers", "Content Type", "Request Body", "Expected Status", "Expected Response"].map((head, idx) => (
+                {["#", "URL", "Method", "Headers", "Request Body", "Expected Status", "Expected Response", "Description"].map((head, idx) => (
                   <th key={idx} className="px-4 py-2 text-left text-xs font-bold text-gray-300 uppercase tracking-wider">{head}</th>
                 ))}
               </tr>
@@ -81,10 +97,10 @@ function App() {
                   <td className="px-4 py-2 text-sm text-blue-400 truncate max-w-xs" title={test.request_url}>{test.request_url || 'N/A'}</td>
                   <td className="px-4 py-2 text-sm text-green-400">{test.http_method || 'N/A'}</td>
                   <td className="px-4 py-2 text-xs text-gray-300">{formatValue(test.headers)}</td>
-                  <td className="px-4 py-2 text-xs text-gray-300">{test.content_type || 'N/A'}</td>
                   <td className="px-4 py-2 text-xs text-gray-300">{formatValue(test.request_body)}</td>
                   <td className="px-4 py-2 text-sm text-yellow-300">{test.expected_response_code || 'N/A'}</td>
                   <td className="px-4 py-2 text-xs text-gray-300">{formatValue(test.expected_response_body)}</td>
+                  <td className="px-4 py-2 text-xs text-gray-300">{test.description || 'N/A'}</td>
                 </tr>
               ))}
             </tbody>
@@ -133,18 +149,45 @@ function App() {
                 value={apiSpec}
                 onChange={(e) => setApiSpec(e.target.value)}
                 placeholder="Enter your API endpoint (e.g., GET /users)"
-                className="bg-gray-800 text-white border-2 border-transparent focus:border-transparent focus:ring-4 focus:ring-green-400/60 w-full h-32 resize-none text-lg rounded-xl shadow-lg transition-all duration-300 outline-none [box-shadow:0_0_0_3px_rgba(34,211,238,0.4),0_2px_8px_rgba(0,0,0,0.15)] focus:[box-shadow:0_0_0_4px_rgba(34,211,238,0.7),0_2px_16px_rgba(0,0,0,0.18)]"
+                className="bg-gray-800 text-white border-2 border-transparent focus:border-transparent focus:ring-4 focus:ring-green-400/60 w-full resize-none text-lg rounded-xl shadow-lg transition-all duration-300 outline-none [box-shadow:0_0_0_3px_rgba(34,211,238,0.4),0_2px_8px_rgba(0,0,0,0.15)] focus:[box-shadow:0_0_0_4px_rgba(34,211,238,0.7),0_2px_16px_rgba(0,0,0,0.18)]"
                 disabled={loading}
-                style={{ minHeight: 120, maxHeight: 200 }}
+                style={{ minHeight: '20vh', maxHeight: '60vh', height: 'auto', overflow: 'auto' }}
+                rows={Math.max(6, apiSpec.split('\n').length)}
               />
-              <RainbowButton
-                onClick={generateTests}
-                className={`w-full py-4 text-lg font-bold text-white bg-gradient-to-r from-green-400 via-blue-500 to-purple-500 hover:from-green-500 hover:to-blue-600 transition-all duration-300 rounded-lg shadow-xl ${loading ? 'opacity-50 cursor-not-allowed' : ''}`}
-                disabled={loading}
-                style={{ minHeight: 56, fontSize: 20 }}
-              >
-                {loading ? <Spinner size={28} color="#fff" className="mx-auto" /> : "Generate Test Cases"}
-              </RainbowButton>
+              <div className="flex flex-row gap-4 w-full">
+                <RainbowButton
+                  onClick={() => generateCategoryTests('positive')}
+                  className={`flex-1 py-4 text-lg font-bold text-white bg-gradient-to-r from-green-400 via-blue-500 to-purple-500 hover:from-green-500 hover:to-blue-600 transition-all duration-300 rounded-lg shadow-xl ${loading ? 'opacity-50 cursor-not-allowed' : ''}`}
+                  disabled={loading}
+                  style={{ minHeight: 56, fontSize: 20 }}
+                >
+                  Positive
+                </RainbowButton>
+                <RainbowButton
+                  onClick={() => generateCategoryTests('negative')}
+                  className={`flex-1 py-4 text-lg font-bold text-white bg-gradient-to-r from-red-400 via-pink-500 to-purple-500 hover:from-red-500 hover:to-pink-600 transition-all duration-300 rounded-lg shadow-xl ${loading ? 'opacity-50 cursor-not-allowed' : ''}`}
+                  disabled={loading}
+                  style={{ minHeight: 56, fontSize: 20 }}
+                >
+                  Negative
+                </RainbowButton>
+                <RainbowButton
+                  onClick={() => generateCategoryTests('edge')}
+                  className={`flex-1 py-4 text-lg font-bold text-white bg-gradient-to-r from-yellow-400 via-orange-500 to-pink-500 hover:from-yellow-500 hover:to-orange-600 transition-all duration-300 rounded-lg shadow-xl ${loading ? 'opacity-50 cursor-not-allowed' : ''}`}
+                  disabled={loading}
+                  style={{ minHeight: 56, fontSize: 20 }}
+                >
+                  Edge
+                </RainbowButton>
+                <RainbowButton
+                  onClick={() => generateCategoryTests('security')}
+                  className={`flex-1 py-4 text-lg font-bold text-white bg-gradient-to-r from-blue-400 via-indigo-500 to-purple-500 hover:from-blue-500 hover:to-indigo-600 transition-all duration-300 rounded-lg shadow-xl ${loading ? 'opacity-50 cursor-not-allowed' : ''}`}
+                  disabled={loading}
+                  style={{ minHeight: 56, fontSize: 20 }}
+                >
+                  Security
+                </RainbowButton>
+              </div>
             </div>
           </CardContent>
         </Card>
@@ -161,14 +204,11 @@ function App() {
             </div>
           </ErrorBoundary>
         )}
-        {!loading && testCases && (
+        {!loading && testCases && activeCategory && (
           <Card className="bg-gray-900 border-none">
             <CardContent className="p-6">
-              <h2 className="text-3xl font-bold mb-6 text-white">Generated Test Cases</h2>
-              <TestCaseTable title="Positive Test Cases" testCases={testCases.positive_tests} />
-              <TestCaseTable title="Negative Test Cases" testCases={testCases.negative_tests} />
-              <TestCaseTable title="Edge Test Cases" testCases={testCases.edge_tests} />
-              <TestCaseTable title="Security Test Cases" testCases={testCases.security_tests} />
+              <h2 className="text-3xl font-bold mb-6 text-white">{activeCategory.charAt(0).toUpperCase() + activeCategory.slice(1)} Test Cases</h2>
+              <TestCaseTable title={activeCategory.charAt(0).toUpperCase() + activeCategory.slice(1) + ' Test Cases'} testCases={testCases} />
             </CardContent>
           </Card>
         )}

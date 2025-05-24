@@ -1,3 +1,8 @@
+# Checkpoint 1 for ai-engine/app.py
+# Date: 2025-05-21
+# This is a backup of the working state of app.py as confirmed by the user.
+
+# --- BEGIN app.py ---
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import requests
@@ -17,74 +22,32 @@ def health_check():
     return {"status": "ok"}
 
 # Cache the test case generation for similar endpoints
-# @lru_cache(maxsize=100)
-# def get_cached_test_cases(endpoint: str):
-#     return generate_test_cases_internal(endpoint)
+@lru_cache(maxsize=100)
+def get_cached_test_cases(endpoint: str):
+    return generate_test_cases_internal(endpoint)
 
+def clean_json_string(s: str) -> str:
+    """Clean and extract valid JSON from the response string."""
+    # Find the first { and last }
+    start = s.find('{')
+    end = s.rfind('}')
+    if start == -1 or end == -1:
+        return s
+    
+    # Extract the JSON part
+    json_str = s[start:end + 1]
+    
+    # Remove any trailing commas before closing braces/brackets
+    json_str = re.sub(r',(\s*[}}\]])', r'\1', json_str)
+    
+    return json_str
 
-def generate_test_cases_internal(endpoint: str, category: str = None, max_retries=3, min_cases=5):
+def generate_test_cases_internal(endpoint: str, max_retries=3):
     # More explicit prompt for LLM
-    if category:
-        prompt = f"""
+    prompt = f"""
 You are an expert API test case generator.
 
-Your task is to generate a diverse and realistic set of API test cases for the given endpoint: **{endpoint}**.
-
-**IMPORTANT:** Every test case MUST have a non-empty, meaningful description. If you do not include a unique, meaningful description for each test case, your output will be rejected.
-
-Return ONLY a valid JSON array of {category} test cases. Each test case must be a JSON object with the following fields (in this order):
-- description (string)  # Short, unique, and meaningful description of what this test case checks and how it is different
-- request_url (string)
-- http_method (string)
-- request_body (object or N/A)
-- expected_response_code (number)
-- expected_response_body (object)
-
-## Requirements:
-- Generate at least 5 varied {category} test cases.
-- Ensure variety in HTTP methods, request bodies, and expected responses.
-- Use realistic and meaningful values based on typical API usage.
-- **Every test case must have a unique and concise description explaining its purpose or what makes it different.**
-
-## Guidelines:
-- Positive tests: successful and valid use cases.
-- Negative tests: invalid inputs, missing parameters, wrong HTTP methods, etc.
-- Edge tests: boundary conditions (very long strings, empty values, special characters, large numbers, etc.)
-- Security tests: XSS, SQL injection, invalid tokens, unauthorized access attempts.
-
-## Output format example:
-[
-  {{
-    "description": "Valid GET request for resource 1. Checks normal retrieval.",
-    "request_url": "https://api.example.com/resource/1",
-    "http_method": "GET",
-    "request_body": {{}},
-    "expected_response_code": 200,
-    "expected_response_body": {{"id": 1, "name": "foo"}}
-  }}
-]
-
-## Important:
-- Do NOT include any explanation or text outside the JSON.
-- Do NOT repeat the same test cases or values.
-- Use double quotes for all keys and string values.
-- Do not include any explanatory text or markdown - ONLY valid JSON.
-- Properly escape any special characters in strings.
-- Use proper JSON syntax for nested objects and arrays.
-- Ensure all objects and arrays have matching closing brackets/braces.
-- Do not include any tokens, formatting markers, or internal model tokens.
-- **Do NOT truncate your output. Always finish the JSON array completely, including all closing brackets and commas.**
-- If you reach the end of your output, always close all open objects and arrays so the JSON is valid and complete.
-
-Now generate a complete, unique, diverse set of {category} test cases for **{endpoint}** in the format above.
-"""
-    else:
-        prompt = f"""
-You are an expert API test case generator.
-
-Your task is to generate a diverse and realistic set of API test cases for the given endpoint: **{endpoint}**.
-
-**IMPORTANT:** Every test case MUST have a non-empty, meaningful description. If you do not include a unique, meaningful description for each test case, your output will be rejected.
+Your task is to generate a diverse and realistic set of 2 API test cases for the given endpoint: **{endpoint}**.
 
 Return ONLY a valid JSON object with the following structure:
 {{
@@ -95,13 +58,12 @@ Return ONLY a valid JSON object with the following structure:
 }}
 
 ## Requirements:
-- Each array must contain at least **{min_cases} varied test cases**.
+- Each array must contain at least **3 varied test cases**.
 - Ensure variety in:
   - HTTP methods (GET, POST, PUT, DELETE, PATCH where appropriate)
   - Request bodies (with different key-value combinations, data types, and optional/missing fields)
   - Expected response codes and bodies
 - Use realistic and meaningful values based on typical API usage.
-- **Every test case must have a unique and concise description explaining its purpose or what makes it different.**
 
 ## Guidelines:
 - Positive tests should validate successful and valid use cases.
@@ -113,7 +75,6 @@ Return ONLY a valid JSON object with the following structure:
 {{
   "positive_tests": [
     {{
-      "description": "Valid GET request for resource 1. Checks normal retrieval.",
       "request_url": "string",
       "http_method": "string",
       "request_body": {{ key-value pairs }},
@@ -144,6 +105,54 @@ Return ONLY a valid JSON object with the following structure:
 Now generate a complete, unique, diverse set of test cases for **{endpoint}** in the format above.
 """
 
+    def fix_pythonic_strings(raw: str) -> str:
+        # Replace "a"*100 with 100 times "a"
+        return re.sub(r'"([a-zA-Z0-9])"\s*\*\s*(\d+)', lambda m: '"' + m.group(1) * int(m.group(2)) + '"', raw)
+
+    def remove_incomplete_trailing_objects(json_str: str) -> str:
+        """
+        Remove incomplete trailing objects from arrays in the JSON string.
+        This is a best-effort approach: it looks for the last complete object in each array and trims off any trailing incomplete objects.
+        """
+        # Remove incomplete objects at the end of arrays (e.g., { ... "rating)
+        # This will trim any trailing comma and incomplete object at the end of an array
+        # Example: [ {...}, {...}, { ...incomplete... ]  => [ {...}, {...} ]
+        def fix_array(arr_match):
+            arr = arr_match.group(0)
+            # Find all complete objects
+            objects = list(re.finditer(r'\{[^\{\}]*\}', arr))
+            if not objects:
+                return '[]'
+            # Find the last complete object
+            last_obj = objects[-1]
+            # Return array up to the end of the last complete object
+            return arr[:last_obj.end()] + ']'  # close the array
+        # Apply to all arrays in the JSON
+        fixed = re.sub(r'\[.*?\]', fix_array, json_str, flags=re.DOTALL)
+        return fixed
+
+    def fix_missing_commas_in_arrays(json_str: str) -> str:
+        """
+        Insert missing commas between objects in arrays, e.g. [{...}{...}] -> [{...},{...}]
+        Only applies inside arrays.
+        Handles cases where there are nested braces or tricky content (like quotes inside strings).
+        """
+        # This regex finds a closing curly brace followed by optional whitespace/newlines and an opening curly brace,
+        # but only if the closing brace is not followed by a comma or array/obj end
+        # It is robust to nested braces and quoted content
+        def replacer(match):
+            before = match.group(1)
+            between = match.group(2)
+            after = match.group(3)
+            # Only insert comma if not already present
+            if not between.strip().startswith(','):
+                return before + ',' + between + after
+            return match.group(0)
+        # Only operate inside arrays
+        # This will match inside [ ... ]
+        array_pattern = re.compile(r'(\})(\s*)(\{)', re.MULTILINE)
+        return array_pattern.sub(replacer, json_str)
+
     for attempt in range(max_retries):
         try:
             print(f"\nGenerating test cases for: {endpoint} (Attempt {attempt + 1})")
@@ -170,49 +179,40 @@ Now generate a complete, unique, diverse set of test cases for **{endpoint}** in
             result = response.json()
             raw_response = result.get("response", "").strip()
             print(f"\nRaw response from Ollama (Attempt {attempt+1}):\n{raw_response}")
-            # Accept both array and object as valid JSON root
-            if not raw_response or (not raw_response.strip().startswith('{') and not raw_response.strip().startswith('[')):
+            if not raw_response or not raw_response.strip().startswith('{'):
                 print(f"No JSON found in response (Attempt {attempt+1}). Retrying...")
                 continue
-            # Strictly extract only the first valid JSON object or array
-            start_obj = raw_response.find('{')
-            start_arr = raw_response.find('[')
-            if (start_obj == -1 and start_arr == -1):
-                print(f"No JSON object or array found in response (Attempt {attempt+1}). Retrying...")
-                continue
-            if start_arr != -1 and (start_obj == -1 or start_arr < start_obj):
-                # Array comes first
-                start = start_arr
-                end = raw_response.rfind(']') + 1
-            else:
-                # Object comes first
-                start = start_obj
-                end = raw_response.rfind('}') + 1
+            # Fix pythonic string multiplication before parsing
+            fixed_response = fix_pythonic_strings(raw_response)
+            # Remove incomplete trailing objects from arrays
+            fixed_response = remove_incomplete_trailing_objects(fixed_response)
+            # Fix missing commas between objects in arrays (robust)
+            fixed_response = fix_missing_commas_in_arrays(fixed_response)
+            # Additional fix: Replace nested single quotes in XSS and SQLi test cases
+            # Replace title='<script>alert('XSS')</script> with title='<script>alert("XSS")</script>'
+            # # Fix SQL injection: ensure closing single quote
+            # fixed_response = re.sub(r"title='<script>alert\('XSS'\)</script>'", "title='<script>alert(\\\"XSS\\\")</script>'", fixed_response)
+            # # Fix SQL injection: ensure closing single quote
+            # fixed_response = re.sub(r"sql='UNION SELECT \* FROM users--(?!')", "sql='UNION SELECT * FROM users--'", fixed_response)
+            # Strictly extract only the first valid JSON object (from first { to last })
+            start = fixed_response.find('{')
+            end = fixed_response.rfind('}') + 1
             if start >= 0 and end > start:
-                json_str = raw_response[start:end]
+                json_str = fixed_response[start:end]
                 # Remove any trailing commas before closing braces/brackets
                 json_str = re.sub(r',([\s\n]*[}}\]])', r'\1', json_str)
-                # Remove any data after the last closing brace/bracket
-                if json_str.strip().startswith('['):
-                    json_str = json_str[:json_str.rfind(']')+1]
-                else:
-                    json_str = json_str[:json_str.rfind('}')+1]
+                # Remove any data after the last closing brace
+                json_str = json_str[:json_str.rfind('}')+1]
                 try:
                     parsed = json.loads(json_str)
                     # If the response is a dict with a single key (e.g., 'positive_tests'), extract the array
                     if isinstance(parsed, dict) and len(parsed) == 1:
                         key = next(iter(parsed))
                         if key in ["positive_tests", "negative_tests", "edge_tests", "security_tests"] and isinstance(parsed[key], list):
-                            arr = parsed[key]
-                            if category:
-                                arr = filter_by_category(arr, category)
-                            return arr
-                    # If the response is already an array, filter by category if needed
+                            return parsed[key]
+                    # If the response is already an array, return as is
                     if isinstance(parsed, list):
-                        arr = parsed
-                        if category:
-                            arr = filter_by_category(arr, category)
-                        return arr
+                        return parsed
                     # Fallback: return the parsed object
                     return parsed
                 except json.JSONDecodeError as e:
@@ -229,7 +229,7 @@ Now generate a complete, unique, diverse set of test cases for **{endpoint}** in
                         }
                     continue
             else:
-                print(f"No JSON object or array found in response (Attempt {attempt+1}). Retrying...")
+                print(f"No JSON object found in response (Attempt {attempt+1}). Retrying...")
                 continue
         except requests.Timeout:
             print(f"\nRequest timed out (Attempt {attempt + 1})")
@@ -261,17 +261,16 @@ Now generate a complete, unique, diverse set of test cases for **{endpoint}** in
         "error": "Failed to generate test cases after all attempts"
     }
 
-def generate_n_test_cases(endpoint: str, category: str, n: int = 5, max_retries=3):
+def generate_n_test_cases(endpoint: str, category: str, n: int = 3, max_retries=3):
     test_cases = []
     required_keys = [
         "request_url",
         "http_method",
         "headers",
-        # "content_type",  # Removed content_type from required keys
+        "content_type",
         "request_body",
         "expected_response_code",
-        "expected_response_body",
-        "description"  # Add description to required keys
+        "expected_response_body"
     ]
     def normalize_test_case(tc):
         # If the test case is not a dict, return a dict with all N/A
@@ -288,8 +287,7 @@ def generate_n_test_cases(endpoint: str, category: str, n: int = 5, max_retries=
             "data": "expected_response_body",
             "body": "request_body",
             "response_code": "expected_response_code",
-            "response_body": "expected_response_body",
-            "desc": "description"
+            "response_body": "expected_response_body"
         }
         norm = {k: tc.get(k, "N/A") for k in required_keys}
         for src, dst in mapping.items():
@@ -300,11 +298,50 @@ def generate_n_test_cases(endpoint: str, category: str, n: int = 5, max_retries=
             norm["expected_response_body"] = tc["data"]
         if "body" in tc and norm["request_body"] == "N/A":
             norm["request_body"] = tc["body"]
-        # If the LLM returned a 'desc' or similar, use as description
-        if "desc" in tc and norm["description"] == "N/A":
-            norm["description"] = tc["desc"]
         return norm
+    def autoclose_json(raw_response):
+        # Try to auto-close the last object/array if missing
+        s = raw_response.strip()
+        # Count braces/brackets
+        open_braces = s.count('{')
+        close_braces = s.count('}')
+        open_brackets = s.count('[')
+        close_brackets = s.count(']')
+        # Add missing closing braces/brackets
+        s += '}' * (open_braces - close_braces)
+        s += ']' * (open_brackets - close_brackets)
+        return s
 
+    def autoclose_json_brackets(s: str) -> str:
+        """
+        Attempts to auto-close any unclosed curly braces or square brackets in a JSON string.
+        Appends the required number of closing brackets/braces at the end.
+        """
+        open_curly = s.count('{')
+        close_curly = s.count('}')
+        open_square = s.count('[')
+        close_square = s.count(']')
+        s = s.rstrip()
+        s += '}' * (open_curly - close_curly)
+        s += ']' * (open_square - close_square)
+        return s
+
+    def trim_incomplete_object(json_str: str) -> str:
+        """
+        Trims the last incomplete field or object from a JSON object string.
+        This is a best-effort approach: it looks for the last complete key-value pair and trims off any trailing incomplete content.
+        """
+        last_comma = json_str.rfind(',')
+        last_close = max(json_str.rfind('}'), json_str.rfind(']'))
+        if last_close > last_comma:
+            # Looks like the last object/array is complete
+            return json_str[:last_close+1]
+        elif last_comma != -1:
+            # Trim to the last comma (removes incomplete trailing field)
+            return json_str[:last_comma] + '}'
+        else:
+            # Fallback: just return up to the last closing brace/bracket
+            return json_str[:last_close+1] if last_close != -1 else json_str
 
     def clean_and_parse_json(raw_response):
         # Try to extract the first valid JSON object
@@ -319,8 +356,30 @@ def generate_n_test_cases(endpoint: str, category: str, n: int = 5, max_retries=
             try:
                 return json.loads(json_str)
             except Exception as e:
-                print(f"Failed to parse JSON: {e}\nRaw: {json_str}")
-                return None
+                print(f"Failed to parse JSON: {e}\nRaw: {json_str}\nTrying demjson3 repair...")
+                try:
+                    repaired = demjson3.decode(json_str)
+                    return repaired
+                except Exception as e2:
+                    print(f"demjson3 repair also failed: {e2}\nRaw: {json_str}")
+                    # Try trimming incomplete trailing fields/objects
+                    trimmed = trim_incomplete_object(json_str)
+                    try:
+                        return json.loads(trimmed)
+                    except Exception as e3:
+                        print(f"trim_incomplete_object also failed: {e3}\nRaw: {trimmed}")
+                        # Try autoclose fallback
+                        closed = autoclose_json_brackets(json_str)
+                        try:
+                            return json.loads(closed)
+                        except Exception as e4:
+                            print(f"autoclose_json_brackets also failed: {e4}\nRaw: {closed}")
+                            # Final salvage: try to extract as many top-level fields as possible
+                            salvaged = salvage_top_level_fields(json_str)
+                            if salvaged:
+                                print("salvage_top_level_fields succeeded")
+                                return salvaged
+                            return None
         else:
             print(f"No JSON object found in response. Raw: {raw_response}")
             return None
@@ -392,39 +451,6 @@ Do not include any explanation, markdown, or extra text. Only output the JSON ob
                 continue
     return test_cases
 
-def filter_by_category(testcases, category):
-    """
-    Filters a list of test cases to only include those matching the given category in their description or metadata.
-    If the input is already a list of only the selected category, returns as is.
-    """
-    # Accept both full category name and short (e.g., 'positive' or 'positive_tests')
-    cat = category.lower()
-    filtered = []
-    for tc in testcases:
-        # Some LLMs add a 'category' field, some only have description
-        tc_cat = tc.get('category', '').lower() if isinstance(tc, dict) else ''
-        desc = tc.get('description', '').lower() if isinstance(tc, dict) else ''
-        if cat in tc_cat or cat in desc:
-            filtered.append(tc)
-    # If nothing matched, assume all are of the requested category (LLM may not label)
-    if not filtered and isinstance(testcases, list):
-        filtered = testcases
-    # Always return at least 5 (truncate or pad with N/A if needed)
-    if len(filtered) > 5:
-        filtered = filtered[:5]
-    elif len(filtered) < 5:
-        # Pad with dummy test cases if not enough
-        for _ in range(5 - len(filtered)):
-            filtered.append({
-                "description": f"Dummy {category} test case (insufficient generated)",
-                "request_url": "N/A",
-                "http_method": "N/A",
-                "request_body": {},
-                "expected_response_code": 0,
-                "expected_response_body": {}
-            })
-    return filtered
-
 @app.post("/generate-testcases")
 async def generate_testcases(request: TestCaseRequest):
     try:
@@ -441,33 +467,35 @@ async def generate_testcases(request: TestCaseRequest):
                 break
         print(f"[DEBUG] Inferred category: {category}")
         if not category:
-            # No category specified, generate all categories at once
-            test_cases = generate_test_cases_internal(endpoint, min_cases=5)
-            print(f"[DEBUG] Generated test cases: {test_cases}")
-            if not test_cases or not any(isinstance(test_cases.get(cat+"_tests", []), list) and len(test_cases.get(cat+"_tests", [])) > 0 for cat in ["positive", "negative", "edge", "security"]):
-                return {
-                    "testcases": json.dumps([]),
-                    "error": f"No test cases generated for endpoint: {endpoint}"
-                }
+            category = "positive"
+        # Generate 3 test cases by default
+        test_cases = generate_n_test_cases(endpoint, category, n=3)
+        print(f"[DEBUG] Generated test cases: {test_cases}")
+        if not test_cases or (isinstance(test_cases, list) and len(test_cases) == 0):
             return {
-                "testcases": json.dumps(test_cases, ensure_ascii=False)
+                "testcases": json.dumps([]),
+                "error": f"No test cases generated for endpoint: {endpoint} and category: {category}"
             }
-        else:
-            # Category specified, generate only that category, and ensure at least 5 test cases
-            test_cases = generate_test_cases_internal(endpoint, category, min_cases=5)
-            print(f"[DEBUG] Generated test cases: {test_cases}")
-            if not test_cases or (isinstance(test_cases, list) and len(test_cases) == 0):
-                return {
-                    "testcases": json.dumps([]),
-                    "error": f"No test cases generated for endpoint: {endpoint} and category: {category}"
-                }
-            # Only return the selected category's test cases in the expected structure
-            result = {cat+"_tests": [] for cat in ["positive", "negative", "edge", "security"]}
-            result[category+"_tests"] = test_cases
-            return {
-                "testcases": json.dumps(result, ensure_ascii=False)
-            }
+        return {
+            "testcases": json.dumps(test_cases, ensure_ascii=False)
+        }
     except Exception as e:
         print(f"\n[ERROR] in generate_testcases endpoint: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
+def salvage_top_level_fields(json_str: str) -> dict:
+    """
+    Attempts to salvage as many top-level fields as possible from a malformed JSON object string.
+    Iteratively removes the last field until parsing succeeds.
+    """
+    import re
+    # Find all top-level key-value pairs
+    pairs = list(re.finditer(r'"([^"\\]+)":\s*([\s\S]*?)(?=,\s*"[^"\\]+":|}$)', json_str))
+    for i in range(len(pairs), 0, -1):
+        try:
+            partial = '{' + ','.join(json_str[p.start():p.end()] for p in pairs[:i]) + '}'
+            return json.loads(partial)
+        except Exception:
+            continue
+    return {}
+# --- END app.py ---
