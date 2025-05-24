@@ -5,4 +5,5 @@ User (Frontend) -->  POST /generate-testcases  (Backend) -->  generate_test_case
 
 **Sample Output**
 
-<img width="1728" alt="Screenshot 2025-05-18 at 17 31 57" src="https://github.com/user-attachments/assets/f2bc0e00-2d23-4b6a-a8b3-1699b27ff723" />
+<img width="1728" alt="Screenshot 2025-05-24 at 13 44 11" src="https://github.com/user-attachments/assets/edf7cbe2-13ba-46e7-99df-2c552ccd8264" />
+
